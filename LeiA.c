@@ -12,60 +12,7 @@
 
 #include <stdint.h>
 #include "driverlib/can.h"
-
-/*************************************
- * struct Section
- *************************************/
-typedef struct{
-    uint16_t     id_msg;    /* 11-bit ID               */
-    uint16_t     id_mac;    /* 11-bit ID for MAC       */
-    uint16_t     id_fail;   /* 11-bit ID for AUTH Fail */
-    uint64_t   kid;       /* 128-bit Key             */
-    uint64_t   eid;       /* 56-bit Epoch Counter    */
-    uint64_t   keid;      /* 128-bit Temp Key        */
-    uint16_t     cid;       /* 16-bit Counter          */
-    uint64_t   data;      /* 64-bit Data             */
-}tuple_t;
-
-typedef struct{
-    uint8_t    is_Extended;
-    uint16_t     id;
-    uint8_t    command_code;
-    uint64_t   eid;
-    uint16_t     cid;
-    uint64_t   data;
-    uint64_t   mac_received;
-    uint64_t   mac_computed;
-    uint8_t    dlc;
-    uint64_t   eid_received;
-    uint64_t   eid_mac_received;
-    uint64_t   eid_mac_computed;
-} message_t;
-
-/*************************************
- *      Functions Defination Section
- *************************************/
-void Initiate(void);
-void LeiA_Init(void);
-void LeiA_SessionKeyGeneration(void);
-void DecodeReceivedMessage(void);
-uint64_t CalculateMacKeid(void);
-uint64_t CalculateEidMac(void);
-uint64_t  CalculateMacData(void);
-uint8_t ValidateEC(void);
-void UpdateEC(void);
-void UpdateCounters(void);
-uint64_t EncodeExtendedId(uint8_t param_commandcode);
-void LeiA_SendAuthMessage(void);
-void SendDataMac(void);
-void LeiA_HandleAuthFailReceived(void);
-void SendEidiMac(void);
-void LeiA_HandleEidiMacReceived(void);
-void LeiA_HandleDataMacReceived(void);
-void LeiA_SendAuthFailMessage(void);
-void DecodeReceivedMessage(void);
-
-uint32_t mkExtId(uint32_t id); //used to convert the ID into extended id
+#include "LeiA.h"
 
 /*************************************
  *      Variables Sections
@@ -73,8 +20,10 @@ uint32_t mkExtId(uint32_t id); //used to convert the ID into extended id
 const uint8_t DISABLE = 0;
 const uint8_t ENABLE  = 1;
 
-struct tuple_t t;
-struct message_t m_rx;
+volatile uint8_t CanChannel = 0;
+
+tuple_t t;
+message_t m_rx;
 
 tCANMsgObject MsgObjectTx; //CAN msg that will be sent
 
@@ -95,8 +44,8 @@ volatile uint64_t mac_calculated_till_mac;
 *    Global variables: -
 *             Remarks: This Function should be called after the ECU is POwered ON to enable the protocol
 ***************************************************************************************************/
-void initiate(void){
-
+void initiate(uint8_t canCh){
+    CanChannel = canCh;
     LeiA_Init();
     LeiA_SessionKeyGeneration();
 }
@@ -272,7 +221,7 @@ void UpdateCounters(void)
 * Parameters (IN/OUT): -
 *        Return value: uint32_t EncodedExtendedID
 *    Global variables: -
-*             Remarks: -
+*             Remarks: the actual commandcode is just 2bit
 ***************************************************************************************************/
 uint32_t EncodeExtendedId(uint8_t param_commandcode)
 {
@@ -280,11 +229,11 @@ uint32_t EncodeExtendedId(uint8_t param_commandcode)
     uint8_t      temp_cc;
     uint16_t       temp_cid;
 
-    temp_cc   = param_commandcode;
+    temp_cc   = param_commandcode; // the actual commandcode is just 2bit
     temp_cid  = t.cid;
     // id= 00000000000000000000000
     // cid=000000001100101011111010
-    // cc =101010110000000000000000
+    // cc =000000110000000000000000
     temp_id = t.cid + (temp_cc<<16);
     return temp_id;
 }
@@ -300,8 +249,24 @@ uint32_t EncodeExtendedId(uint8_t param_commandcode)
 *             Remarks: -
 ***************************************************************************************************/
 uint32_t mkExtId(uint32_t id){
-    return (id|0x80000000)
+    return (id|0x80000000);
 }
+
+
+/***************************************************************************************************
+*       Function name: sendToBus
+*         Description: Send the can msg to the bus
+*     Parameters (IN): -
+*    Parameters (OUT): -
+* Parameters (IN/OUT): -
+*        Return value: 1 or 0 indicating send state
+*    Global variables: -
+*             Remarks: it will use the can base indicated in configuration section
+***************************************************************************************************/
+uint8_t sendToBus(tCANMsgObject msg){
+
+}
+
 
 /*****************************************************************************/
 /* !Description: Session Key Generation                                      */
@@ -363,22 +328,42 @@ void SendDataMac(void)
 {
     uint32_t temp_id; //PS:converted from 64bit to 32bit
     tCANMsgObject msg;
+    uint64_t canData ;
+    uint8_t *pointerCanToData = (uint8_t *)&canData;
 
-    temp_id  = EncodeExtendedId(0); // encode
+
+    temp_id  = EncodeExtendedId(0); // the important bits are 18 bits ,command code ==0 means data msg
     temp_id += t.id_msg<<18;
     msg.ui32MsgID = mkExtId(temp_id);
-    //  msg.id   = mkExtId(temp_id);
-    msg.dlc = 7;
-    msg.int64(0) = t.data;
-    output(msg);
-    //write("Data Message with ID %lx and Extended ID %lx",t.id_msg,msg.id);
+//    msg.dlc = 7;
+    msg.ui32MsgLen = 7;
+//    msg.pui8MsgData =
+    canData = t.data;
+    msg.pui8MsgData = (uint8_t *)&canData;
+//    output(msg);
+    if(1==sendToBus(msg)){ //send data msg to channel
+        //preparing the msc msg
 
-    temp_id  = EncodeExtendedId(1);
-    temp_id += t.id_mac<<18;
-    msg.id   = mkExtId(temp_id);
+        temp_id  = EncodeExtendedId(1);//command code ==0 means mac msg
+        temp_id += t.id_mac<<18;
+        msg.ui32MsgID= mkExtId(temp_id);
 
-    //if (debug_state == ENABLE) write("Sender: Calculate MAC Data");
-    msg.dlc = 8;
-    msg.int64(0) = CalculateMacData();
-    output(msg);
+        //if (debug_state == ENABLE) write("Sender: Calculate MAC Data");
+        msg.ui32MsgLen = 8;
+        canData = CalculateMacData();
+        msg.pui8MsgData =(uint8_t *)&canData;
+        if(1==sendToBus(msg)){
+            //done
+
+        }else{
+            // the mac msg wasn't sent
+        }
+    }else{
+        // the data msg wasn't sent
+    }
 }
+
+/*****************************************************************************/
+/* !Description: Handle Resynchronization at Sender Side                     */
+/*****************************************************************************/
+
