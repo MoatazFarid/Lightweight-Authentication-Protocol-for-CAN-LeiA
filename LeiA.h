@@ -60,9 +60,12 @@ void LeiA_HandleDataMacReceived(void);
 void LeiA_SendAuthFailMessage(void);
 void DecodeReceivedMessage(void);
 
-uint32_t mkExtId(uint32_t id); //used to convert the ID into extended id
-uint8_t sendToBus(tCANMsgObject msg); //used to send the can msg to the bus
 
+
+uint32_t mkExtId(uint32_t id); //used to convert the ID into extended id
+uint8_t isExtId(uint32_t id); // used to check if msg is extended or not
+uint8_t sendToBus(tCANMsgObject msg); //used to send the can msg to the bus
+void msgRecieveHandler(tCANMsgObject msg); // handling the reception of the msg
 
 
 
